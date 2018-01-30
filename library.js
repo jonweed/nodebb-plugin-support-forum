@@ -30,8 +30,13 @@ plugin.init = function(params, callback) {
 /* Meat */
 
 plugin.supportify = function(data, callback) {	// There are only two hard things in Computer Science: cache invalidation and naming things. -- Phil Karlton
-	User.isAdministrator(data.uid, function(err, isAdmin) {
-		if (!isAdmin && parseInt(data.cid, 10) === parseInt(plugin.config.cid, 10)) {
+
+
+	async.parallel({
+		isModerator: async.apply(User.isModerator, data.uid, data.cid),
+		isAdminOrGlobalMod: async.apply(User.isAdminOrGlobalMod, data.uid)
+	}, function(err, privileges) {
+		if ((!privileges.isAdminOrGlobalMod && !privileges.isModerator) && parseInt(data.cid, 10) === parseInt(plugin.config.cid, 10)) {
 			winston.verbose('[plugins/support-forum] Support forum accessed by uid ' + data.uid);
 			data.targetUid = data.uid;
 			callback(null, data);
@@ -46,9 +51,10 @@ plugin.restrict = {};
 plugin.restrict.topic = function(privileges, callback) {
 	async.parallel({
 		topicObj: async.apply(Topics.getTopicFields, privileges.tid, ['cid', 'uid']),
-		isAdmin: async.apply(User.isAdministrator, privileges.uid)
+		isAdminOrGlobalMod: async.apply(User.isAdminOrGlobalMod, privileges.uid),
+		isModerator: async.apply(User.isModerator, privileges.uid, parseInt(plugin.config.cid, 10))
 	}, function(err, data) {
-		if (parseInt(data.topicObj.cid, 10) === parseInt(plugin.config.cid, 10) && parseInt(data.topicObj.uid, 10) !== parseInt(privileges.uid, 10) && !data.isAdmin) {
+		if (parseInt(data.topicObj.cid, 10) === parseInt(plugin.config.cid, 10) && parseInt(data.topicObj.uid, 10) !== parseInt(privileges.uid, 10) && !data.isAdminOrGlobalMod && !data.isModerator) {
 			winston.verbose('[plugins/support-forum] tid ' + privileges.tid + ' (author uid: ' + data.topicObj.uid + ') access attempt by uid ' + privileges.uid + ' blocked.');
 			privileges.read = false;
 		}
@@ -75,8 +81,11 @@ plugin.restrict.category = function(privileges, callback) {
 };
 
 plugin.filterPids = function(data, callback) {
-	User.isAdministrator(data.uid, function(err, isAdmin) {
-		if (!isAdmin) {
+	async.parallel({
+		isModerator: async.apply(User.isModerator, data.uid, data.cid),
+		isAdminOrGlobalMod: async.apply(User.isAdminOrGlobalMod, data.uid)
+	}, function(err, privileges) {
+		if (!privileges.isAdminOrGlobalMod && !privileges.isModerator) {
 			async.waterfall([
 				async.apply(Posts.getCidsByPids, data.pids),
 				function(cids, next) {
@@ -99,8 +108,11 @@ plugin.filterPids = function(data, callback) {
 };
 
 plugin.filterTids = function(data, callback) {
-	User.isAdministrator(data.uid, function(err, isAdmin) {
-		if (!isAdmin) {
+	async.parallel({
+		isModerator: async.apply(User.isModerator, data.uid, data.cid),
+		isAdminOrGlobalMod: async.apply(User.isAdminOrGlobalMod, data.uid)
+	}, function(err, privileges) {
+		if (!privileges.isAdminOrGlobalMod && !privileges.isModerator) {
 			Topics.getTopicsFields(data.tids, ['cid', 'uid'], function(err, fields) {
 				data.tids = fields.reduce(function(prev, cur, idx) {
 					if (parseInt(cur.cid, 10) !== parseInt(plugin.config.cid, 10) || parseInt(cur.uid, 10) === parseInt(data.uid, 10)) {
@@ -119,8 +131,11 @@ plugin.filterTids = function(data, callback) {
 
 plugin.filterCategory = function(data, callback) {
 	if (plugin.config.ownOnly=='on') {
-		User.isAdministrator(data.uid, function(err, isAdmin) {
-			if (!isAdmin) {
+		async.parallel({
+			isModerator: async.apply(User.isModerator, data.uid, data.cid),
+			isAdminOrGlobalMod: async.apply(User.isAdminOrGlobalMod, data.uid)
+		}, function(err, privileges) {
+			if (!privileges.isAdminOrGlobalMod && !privileges.isModerator) {
 				var filtered = [];
 				if (data.topics && data.topics.length) {
 					data.topics.forEach( function(topic) {
