@@ -154,6 +154,31 @@ plugin.filterCategory = function(data, callback) {
 	}
 };
 
+plugin.templateData = function(data, callback) {
+	if (data.templateData.template.categories) {
+		for (var i=0,ii=data.templateData.categories.length; i < ii; i++) {
+			if (parseInt(data.templateData.categories[i].cid,10) == parseInt(plugin.config.cid, 10)) {
+				data.templateData.categories[i].supportForum = true;
+			}
+		}
+	}
+
+	else if (data.templateData.template.category) {
+		if (parseInt(data.templateData.cid,10) == parseInt(plugin.config.cid, 10)) {
+			data.templateData.supportForum = true;
+		}
+	}
+
+	else if (data.templateData.template.topic) {
+		if (parseInt(data.templateData.category.cid,10) == parseInt(plugin.config.cid, 10)) {
+			data.templateData.supportForum = true;
+		}
+	}
+
+	callback(null, data);
+};
+
+
 /* Admin stuff */
 
 plugin.addAdminNavigation = function(header, callback) {
