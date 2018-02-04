@@ -11,6 +11,7 @@ var winston = module.parent.require('winston'),
 
 	plugin = {};
 
+
 plugin.init = function(params, callback) {
 	var app = params.router,
 		middleware = params.middleware,
@@ -32,25 +33,24 @@ plugin.init = function(params, callback) {
 plugin.isAllowed = function(uid,cid, callback) {
 	async.parallel({
 		isModerator: async.apply(User.isModerator, uid, cid),
-		isAdminOrGlobalMod: async.apply(User.isAdminOrGlobalMod, uid)
+		isAdministrator: async.apply(User.isAdministrator, uid)
 	}, function(err, priv) {
-		priv.isAllowed = (!priv.isAdminOrGlobalMod && !priv.isModerator)
-		? false
-		: true; 
+		priv.isAllowed = (!priv.isAdministrator) ? false : true;
+		if ((plugin.config.allowMods=='on') && !priv.isAllowed && priv.isModerator) {
+			priv.isAllowed = true;
+		}
 
 		return (callback) ? callback(null, priv) : priv;
 	});
 };
 
-plugin.supportify = function(data, callback) {	// There are only two hard things in Computer Science: cache invalidation and naming things. -- Phil Karlton
+plugin.supportify = function(data, callback) {
 	plugin.isAllowed(data.uid, parseInt(plugin.config.cid, 10), function(err, priv) {
 		if ((!priv.isAllowed) && parseInt(data.cid, 10) === parseInt(plugin.config.cid, 10)) {
 			winston.verbose('[plugins/support-forum] Support forum accessed by uid ' + data.uid);
 			data.targetUid = data.uid;
-			callback(null, data);
-		} else {
-			callback(null, data);
 		}
+		callback(null, data);
 	});
 };
 
@@ -72,7 +72,6 @@ plugin.restrict.topic = function(privileges, callback) {
 
 plugin.restrict.category = function(privileges, callback) {
 	if (parseInt(privileges.cid, 10) === parseInt(plugin.config.cid, 10)) {
-		// Override existing privileges so that regular users can enter and create topics
 		var allowed = parseInt(privileges.uid, 10) > 0
 		privileges.read = allowed;
 		privileges['topics:create'] = allowed;
@@ -101,10 +100,10 @@ plugin.filterPids = function(data, callback) {
 							return prev;
 						}, []);
 
-						callback(null, data);
+						next(null, data);
 					});
 				}
-			]);
+			], callback);
 		} else {
 			callback(null, data);
 		}
@@ -114,16 +113,19 @@ plugin.filterPids = function(data, callback) {
 plugin.filterTids = function(data, callback) {
 	plugin.isAllowed(data.uid, parseInt(plugin.config.cid, 10), function(err, privileges) {
 		if (!privileges.isAllowed) {
-			Topics.getTopicsFields(data.tids, ['cid', 'uid'], function(err, fields) {
-				data.tids = fields.reduce(function(prev, cur, idx) {
-					if (parseInt(cur.cid, 10) !== parseInt(plugin.config.cid, 10) || parseInt(cur.uid, 10) === parseInt(data.uid, 10)) {
-						prev.push(data.tids[idx]);
-					}
-					return prev;
-				}, []);
 
-				callback(null, data);
-			});
+			async.waterfall([
+				async.apply(Topics.getTopicsFields, data.tids, ['cid', 'uid']),
+				function(fields, next) {
+					data.tids = fields.reduce(function(prev, cur, idx) {
+						if (parseInt(cur.cid, 10) !== parseInt(plugin.config.cid, 10) || parseInt(cur.uid, 10) === parseInt(data.uid, 10)) {
+							prev.push(data.tids[idx]);
+						}
+						return prev;
+					}, []);
+					next(null,data);
+				},
+			], callback);
 		} else {
 			callback(null, data);
 		}
@@ -131,50 +133,155 @@ plugin.filterTids = function(data, callback) {
 };
 
 plugin.filterCategory = function(data, callback) {
-	if (plugin.config.ownOnly=='on') {
-		plugin.isAllowed(data.uid, parseInt(plugin.config.cid, 10), function(err, privileges) {
-			if (!privileges.isAllowed) {
-				var filtered = [];
-				if (data.topics && data.topics.length) {
-					data.topics.forEach( function(topic) {
-						if (parseInt(topic.cid, 10) !== parseInt(plugin.config.cid, 10) || parseInt(topic.uid, 10) === parseInt(data.uid)) {
-							filtered.push(topic);
-						}
+	plugin.isAllowed(data.uid, parseInt(plugin.config.cid, 10), function(err, privileges) {
+		if (!privileges.isAllowed) {
+			var filtered = [];
+			if (data.topics && data.topics.length) {
+				data.topics.forEach( function(topic) {
+					if (parseInt(topic.cid, 10) !== parseInt(plugin.config.cid, 10) || parseInt(topic.uid, 10) === parseInt(data.uid)) {
+						filtered.push(topic);
+					}
+				});
+			}
+			callback(null, {topics:filtered,uid:data.uid});
+		} else {
+			callback(null, data);
+		}
+	});
+};
+
+plugin.filterNewPost = function(data, callback) {
+	if (parseInt(data.post.cid,10) === parseInt(plugin.config.cid, 10)) {
+		async.filter(data.uidsTo, function(uid, callback) {
+			plugin.isAllowed(uid, parseInt(plugin.config.cid, 10), function(err, privileges) {
+				if (privileges.isAllowed) {
+					callback(null, true);
+				}
+				else {
+					Topics.getTopicField(data.post.topic.tid, 'uid', function(err, tuid) {
+						callback(null, parseInt(uid, 10) == parseInt(tuid, 10));
 					});
 				}
-				callback(null, {topics:filtered,uid:data.uid});
-			} else {
-				callback(null, data);
-			}
+			});
+		}, function(err, results) {
+			data.uidsTo=results;
+			callback(null, data);
 		});
-	} else {
+	}
+	else {
 		callback(null, data);
 	}
 };
 
-plugin.templateData = function(data, callback) {
-	if (data.templateData.template.categories) {
-		for (var i=0,ii=data.templateData.categories.length; i < ii; i++) {
-			if (parseInt(data.templateData.categories[i].cid,10) == parseInt(plugin.config.cid, 10)) {
-				data.templateData.categories[i].supportForum = true;
+
+plugin.recentReplies = function(data, callback) {
+	async.parallel({
+		topics: async.apply(Topics.getTopicsFields, data.tids, ['uid','tid','cid']),
+		privs: async.apply(plugin.isAllowed, data.uid, parseInt(plugin.config.cid, 10)),
+		latestPost: async.apply(plugin.getLatestPost, data)
+	}, function(err, results) {
+		var filtered = [];
+		results.topics.forEach( function(topic) {
+			if (parseInt(topic.cid, 10) == parseInt(plugin.config.cid, 10)) {
+				if (parseInt(topic.uid, 10) === parseInt(data.uid) || results.privs.isAllowed) {
+					filtered.push(topic.tid);
+				}
+				else if (results.latestPost) { filtered.push(results.latestPost); }
+			}
+			else {
+				filtered.push(topic.tid);
+			}
+		});
+		callback(null, filtered);
+	});
+};
+
+plugin.getTopicCount = function(data, callback) {
+	async.waterfall([
+		async.apply(db.getSortedSetRevRange, 'cid:'+parseInt(plugin.config.cid, 10)+':uid:'+parseInt(data.uid, 10)+':tids', 0, -1),
+		function(tids, next) {
+			var stats={topicCount: tids.length, postCount: 0};
+			async.each(tids, function(tid, _next) {
+				Topics.getPids(tid, function(err,pids) {
+					stats.postCount += pids.length;
+					_next();
+				});
+			}, function(err){
+				next(null, stats);
+			});
+		}
+	], callback);
+};
+
+
+plugin.getLatestPost = function(data, callback) {
+	async.waterfall([
+		async.apply(db.getSortedSetRevRange, 'cid:'+parseInt(plugin.config.cid, 10)+':uid:'+parseInt(data.uid, 10)+':tids', 0, 0),
+		function (tids, next) {
+			Topics.getPids(tids[0], next);
+		},
+		function (pids, next) {
+			if (pids.length) {
+				Posts.getPostData(pids[0], function(err, post) {
+					next(null, post.tid);
+				});
+			}
+			else {
+				next(null, false);
 			}
 		}
-	}
+	], callback);
+};
 
-	else if (data.templateData.template.category) {
-		if (parseInt(data.templateData.cid,10) == parseInt(plugin.config.cid, 10)) {
-			data.templateData.supportForum = true;
-		}
-	}
+plugin.categoriesData = function(data, callback) {
+	plugin.isAllowed(data.req.uid, parseInt(plugin.config.cid, 10), function(err, privileges) {
+		async.map(data.templateData.categories, function(category, next){
+			if (parseInt(category.cid,10) == parseInt(plugin.config.cid, 10)) {
+				category.supportForum = true;
+				if (privileges.isAllowed) {
+					category['supportForum:mod'] = true;
+					category['supportForum:stats'] = {topicCount: category.totalTopicCount, postCount: category.totalPostCount};
+					next(null, category);
+				}
+				else {
+					category['reputation:disabled']=!privileges.isAllowed;
+					plugin.getTopicCount({uid:data.req.uid}, function(err, stats) {
+						category['supportForum:stats'] = stats;
+						next(null, category);
+					})
+				}
+			}
+			else {
+				next(null, category);
+			}
+		}, function(err, results) {
+			callback(null, data);
+		});
+	});
+};
 
-	else if (data.templateData.template.topic) {
-		if (parseInt(data.templateData.category.cid,10) == parseInt(plugin.config.cid, 10)) {
-			data.templateData.supportForum = true;
-		}
+plugin.categoryData = function(data, callback) {
+	if (parseInt(data.templateData.cid,10) == parseInt(plugin.config.cid, 10)) {
+		data.templateData.supportForum = true;
+		plugin.isAllowed(data.req.uid, parseInt(plugin.config.cid, 10), function(err, privileges) {
+			data.templateData['reputation:disabled']=!privileges.isAllowed;
+		});
 	}
 
 	callback(null, data);
 };
+
+plugin.topicData = function(data, callback) {
+	if (parseInt(data.templateData.category.cid,10) == parseInt(plugin.config.cid, 10)) {
+		data.templateData.supportForum = true;
+		plugin.isAllowed(data.req.uid, parseInt(plugin.config.cid, 10), function(err, privileges) {
+			data.templateData['reputation:disabled']=!privileges.isAllowed;
+		});
+	}
+
+	callback(null, data);
+};
+
 
 
 /* Admin stuff */

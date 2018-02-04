@@ -17,14 +17,15 @@
 						</p>
 					</div>
 					<div class="form-group">
-						<label for="ownOnly">
-							<input type="checkbox" name="ownOnly" id="ownOnly">
-							Non-admins see only their own topics listed
+						<label for="allowMods">
+							<input type="checkbox" name="allowMods" id="allowMods">
+							Allow moderators.
 						</label>
 						<p class="help-block">
-							If checked, users without administrative privileges will see only their own topics listed in a support forum.
+							If checked, moderators will be given privileges.
 						</p>
 					</div>
+
 				</form>
 			</div>
 		</div>

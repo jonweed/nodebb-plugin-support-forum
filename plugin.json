@@ -12,9 +12,19 @@
 		{ "hook": "filter:privileges.posts.filter", "method": "filterPids" },
 		{ "hook": "filter:categories.recent", "method": "filterPids" },
 		{ "hook": "filter:category.topics.get", "method": "filterCategory" },
-		{ "hook": "filter:middleware.render", "method": "templateData" },
 		{ "hook": "static:app.load", "method": "init" },
-		{ "hook": "filter:admin.header.build", "method": "addAdminNavigation" }
+		{ "hook": "filter:admin.header.build", "method": "addAdminNavigation" },
+		{ "hook": "filter:sockets.sendNewPostToUids", "method": "filterNewPost" },
+		{ "hook": "filter:categories.build", "method": "categoriesData" },
+		{ "hook": "filter:category.build", "method": "categoryData" },
+		{ "hook": "filter:topic.build", "method": "topicData" },
+		{ "hook": "filter:categories.recent.replies", "method": "recentReplies" }
+	],
+	"staticDirs": {
+		"static": "./static"
+	},
+	"scripts": [
+		"static/lib/main.js"
 	],
 	"templates": "static/templates"
 }
